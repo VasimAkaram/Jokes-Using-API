@@ -54,20 +54,173 @@ const getRandomBackupJokes = (count = 3) => {
     return shuffled.slice(0, count).map(joke => ({ joke }));
 };
 
+// Common translations mapping for fallback
+const commonTranslations = {
+    'en-hi': {
+        'Why': 'क्यों',
+        'What': 'क्या',
+        'How': 'कैसे',
+        'programmer': 'प्रोग्रामर',
+        'developer': 'डेवलपर',
+        'because': 'क्योंकि',
+        'software': 'सॉफ्टवेयर',
+        'computer': 'कंप्यूटर'
+    },
+    'hi-en': {
+        'क्यों': 'Why',
+        'क्या': 'What',
+        'कैसे': 'How',
+        'प्रोग्रामर': 'programmer',
+        'डेवलपर': 'developer',
+        'क्योंकि': 'because',
+        'सॉफ्टवेयर': 'software',
+        'कंप्यूटर': 'computer'
+    }
+};
+
+// Translation cache and rate limiting management
+const translationManager = {
+    cache: new Map(),
+    requestsInLastHour: 0,
+    hourlyLimit: 50,
+    lastReset: Date.now(),
+    queue: [],
+    isProcessing: false,
+    lastRequestTime: 0,
+    minDelayBetweenRequests: 5000, // Increased to 5 seconds minimum
+
+    getCacheKey(text, targetLang) {
+        return `${text}:${targetLang}`;
+    },
+
+    async add(text, targetLang) {
+        const cacheKey = this.getCacheKey(text, targetLang);
+        
+        // Check cache first
+        if (this.cache.has(cacheKey)) {
+            console.log('Using cached translation');
+            return this.cache.get(cacheKey);
+        }
+
+        return new Promise((resolve) => {
+            this.queue.push({ text, targetLang, resolve });
+            this.processQueue();
+        });
+    },
+
+    resetHourlyCounter() {
+        const now = Date.now();
+        if (now - this.lastReset >= 3600000) { // 1 hour
+            this.requestsInLastHour = 0;
+            this.lastReset = now;
+        }
+    },
+
+    async processQueue() {
+        if (this.isProcessing || this.queue.length === 0) return;
+        this.isProcessing = true;
+
+        while (this.queue.length > 0) {
+            this.resetHourlyCounter();
+            
+            // Check if we've hit the hourly limit
+            if (this.requestsInLastHour >= this.hourlyLimit) {
+                console.log('Hourly limit reached, using fallback translations');
+                // Process remaining queue with fallback translations
+                while (this.queue.length > 0) {
+                    const { text, targetLang, resolve } = this.queue.shift();
+                    resolve(this.getFallbackTranslation(text, targetLang));
+                }
+                break;
+            }
+
+            const timeSinceLastRequest = Date.now() - this.lastRequestTime;
+            if (timeSinceLastRequest < this.minDelayBetweenRequests) {
+                await new Promise(resolve => 
+                    setTimeout(resolve, this.minDelayBetweenRequests - timeSinceLastRequest)
+                );
+            }
+
+            const { text, targetLang, resolve } = this.queue.shift();
+            const result = await this.executeTranslation(text, targetLang);
+            
+            // Cache the result
+            const cacheKey = this.getCacheKey(text, targetLang);
+            this.cache.set(cacheKey, result);
+            
+            resolve(result);
+            this.lastRequestTime = Date.now();
+        }
+
+        this.isProcessing = false;
+    },
+
+    async executeTranslation(text, targetLang) {
+        const maxRetries = 2; // Reduced retries
+        const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+        
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
+            try {
+                // Check hourly limit before making request
+                if (this.requestsInLastHour >= this.hourlyLimit) {
+                    return this.getFallbackTranslation(text, targetLang);
+                }
+
+                const response = await fetch(
+                    `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${targetLang === 'hi' ? 'en|hi' : 'hi|en'}`,
+                    { timeout: 5000 }
+                );
+                
+                this.requestsInLastHour++;
+                
+                if (response.status === 429) {
+                    // If rate limited, immediately use fallback
+                    return this.getFallbackTranslation(text, targetLang);
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.responseStatus === 200 && data.responseData.translatedText) {
+                    return data.responseData.translatedText;
+                }
+                
+                throw new Error('Translation response not valid');
+                
+            } catch (error) {
+                console.warn(`Translation attempt ${attempt + 1} failed:`, error);
+                
+                if (attempt === maxRetries - 1) {
+                    return this.getFallbackTranslation(text, targetLang);
+                }
+                
+                await delay(5000 * (attempt + 1)); // Increased delay between retries
+            }
+        }
+        
+        return this.getFallbackTranslation(text, targetLang);
+    },
+
+    getFallbackTranslation(text, targetLang) {
+        const direction = targetLang === 'hi' ? 'en-hi' : 'hi-en';
+        const translations = commonTranslations[direction];
+        
+        let fallbackText = text;
+        for (const [key, value] of Object.entries(translations)) {
+            fallbackText = fallbackText.replace(new RegExp(key, 'gi'), value);
+        }
+        
+        console.log('Using fallback translation');
+        return fallbackText;
+    }
+};
+
 // Function to translate text
 const translateText = async (text, targetLang) => {
-    try {
-        const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${targetLang === 'hi' ? 'en|hi' : 'hi|en'}`);
-        const data = await response.json();
-        
-        if (data.responseStatus === 200 && data.responseData.translatedText) {
-            return data.responseData.translatedText;
-        }
-        throw new Error('Translation failed');
-    } catch (error) {
-        console.warn('Translation failed:', error);
-        return text;
-    }
+    return translationManager.add(text, targetLang);
 };
 
 // Function to format jokes for display
