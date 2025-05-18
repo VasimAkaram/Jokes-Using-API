@@ -354,3 +354,5 @@ updateUILanguage();
 
 // Get initial jokes
 getJoke(); 
+
+//this code is working good  not edit it now
