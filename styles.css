@@ -67,7 +67,7 @@ h1 {
 #get-joke-btn:hover {
     background: #0f6606;
     transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
 }
 
 .category-selector select {
@@ -104,7 +104,7 @@ h1 {
 
 /* Loading animation */
 .loading {
-    opacity: 0.7;
+    opacity: 0.8;
     pointer-events: none;
 }
 
